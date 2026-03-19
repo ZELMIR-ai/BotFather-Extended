@@ -27,8 +27,26 @@ PRODUCT_LABELS = {
     "site":  "🌐 Сайт",
 }
 
+# Хранилище: user_id -> {"free_used": bool, "msg_count": int, "code_count": int}
+user_data_store = {}
 
-def ask_ai(prompt: str) -> str:
+KING_SYSTEM_PROMPT = (
+    "Ты — Король. Мудрый, величественный и немного высокомерный правитель знаний. "
+    "Ты отвечаешь на вопросы с царским достоинством, иногда используешь торжественные фразы, "
+    "обращаешься к собеседнику как 'подданный' или 'смертный'. "
+    "Твои ответы умные, но с характером. Пишешь на русском языке."
+)
+
+
+def get_user_store(user_id: int) -> dict:
+    if user_id not in user_data_store:
+        user_data_store[user_id] = {"free_used": False, "msg_count": 0, "code_count": 0}
+    return user_data_store[user_id]
+
+
+def ask_ai(prompt: str, system: str = None) -> str:
+    if system is None:
+        system = "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."
     try:
         response = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
@@ -39,7 +57,7 @@ def ask_ai(prompt: str) -> str:
             json={
                 "model": "google/gemini-2.0-flash-001",
                 "messages": [
-                    {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": prompt}
                 ],
                 "max_tokens": 3000,
@@ -53,36 +71,62 @@ def ask_ai(prompt: str) -> str:
         return None
 
 
+# ========== /start ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    name = update.effective_user.first_name or "подданный"
+    get_user_store(user_id)  # инициализируем
+
     await update.message.reply_text(
-        "👋 Добро пожаловать в *BotFather Extended!*\n\n"
-        "Я помогу вам создать:\n"
-        "🤖 Telegram бота\n"
-        "🧠 ИИ бота\n"
-        "🌐 Одностраничный сайт\n\n"
-        "💬 Обычный вопрос — *1 ⭐*\n"
-        "🛠 Генерация кода — *3 ⭐*\n\n"
-        "Используйте /newbot чтобы начать!",
+        f"👑 Добро пожаловать, *{name}!*\n\n"
+        "Я — *BotFather Extended*, слуга Короля технологий.\n\n"
+        "🛠 *Создание проектов:*\n"
+        "🤖 /tgbot — Telegram бот\n"
+        "🧠 /aibot — ИИ бот\n"
+        "🌐 /site — Сайт\n"
+        "Стоимость: *10 ⭐ Stars*\n\n"
+        "👑 *Спросить Короля:*\n"
+        "Напишите любой вопрос боту\n"
+        "Первый вопрос — *бесплатно* 🎁\n"
+        "Далее — *3 ⭐ Stars*\n\n"
+        "📊 /stats — ваша статистика\n"
+        "📖 /newbot — создать проект",
         parse_mode="Markdown"
     )
 
 
+# ========== /newbot ==========
 async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛠 *Что хотите создать?*\n\n"
         "/tgbot — 🤖 Telegram бот\n"
         "/aibot — 🧠 ИИ бот\n"
         "/site  — 🌐 Сайт\n\n"
-        "Стоимость: *3 ⭐ Stars*",
+        "Стоимость: *10 ⭐ Stars*",
         parse_mode="Markdown"
     )
 
 
+# ========== /stats ==========
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    store = get_user_store(user_id)
+    free = "использован ✅" if store["free_used"] else "доступен 🎁"
+    await update.message.reply_text(
+        f"📊 *Ваша статистика:*\n\n"
+        f"💬 Вопросов задано: *{store['msg_count']}*\n"
+        f"🛠 Проектов создано: *{store['code_count']}*\n"
+        f"🎁 Бесплатный вопрос: {free}",
+        parse_mode="Markdown"
+    )
+
+
+# ========== Начало диалога ==========
 async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
     context.user_data["product_type"] = product_type
     label = PRODUCT_LABELS[product_type]
     await update.message.reply_text(
-        f"✅ Создаём *{label}* — стоимость *3 ⭐*\n\n"
+        f"✅ Создаём *{label}* — стоимость *10 ⭐*\n\n"
         f"📝 Как будет называться ваш продукт?",
         parse_mode="Markdown"
     )
@@ -98,6 +142,7 @@ async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await begin(update, context, "site")
 
 
+# ========== Имя ==========
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
     await update.message.reply_text(
@@ -108,6 +153,7 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_DESCRIPTION
 
 
+# ========== Описание ==========
 async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = update.message.text
     await update.message.reply_text(
@@ -119,11 +165,11 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_FEATURES
 
 
+# ========== Запрос оплаты за код (10 звёзд) ==========
 async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["features"] = update.message.text
     product_type = context.user_data["product_type"]
     label = PRODUCT_LABELS[product_type]
-    logger.info(f"Sending invoice for {product_type}")
 
     try:
         await context.bot.send_invoice(
@@ -131,11 +177,10 @@ async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYP
             title=f"Создание: {label}",
             description=f"ИИ создаст для вас {label} по вашим требованиям",
             payload=f"code_{product_type}",
-            provider_token="",   # Пустая строка для Telegram Stars
+            provider_token="",
             currency="XTR",
-            prices=[LabeledPrice(label=label, amount=3)],
+            prices=[LabeledPrice(label=label, amount=10)],
         )
-        logger.info("Invoice sent OK")
     except Exception as e:
         logger.error(f"Invoice error: {e}")
         await update.message.reply_text(f"❌ Ошибка при создании счёта: {e}")
@@ -144,11 +189,16 @@ async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     return WAIT_CODE_PAYMENT
 
 
+# ========== PreCheckout ==========
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.pre_checkout_query.answer(ok=True)
 
 
+# ========== Успешная оплата за КОД ==========
 async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    store = get_user_store(user_id)
+
     product_type = context.user_data.get("product_type", "tgbot")
     label = PRODUCT_LABELS.get(product_type, "продукт")
     name = context.user_data.get("name", "")
@@ -183,6 +233,7 @@ async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+    store["code_count"] += 1
     await update.message.reply_text(
         f"🎉 Ваш *{label}* создан!\n\nХотите создать ещё? Используйте /newbot",
         parse_mode="Markdown"
@@ -190,42 +241,71 @@ async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ========== Обычное сообщение — Король ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["pending_message"] = update.message.text
+    user_id = update.effective_user.id
+    store = get_user_store(user_id)
+    text = update.message.text
+
+    # Первое сообщение бесплатно
+    if not store["free_used"]:
+        store["free_used"] = True
+        store["msg_count"] += 1
+        await update.message.reply_text("🎁 *Ваш первый вопрос — бесплатно!*\n\n⏳ Король думает...", parse_mode="Markdown")
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        result = ask_ai(text, system=KING_SYSTEM_PROMPT)
+        if result:
+            await update.message.reply_text(f"👑 *Король отвечает:*\n\n{result}\n\n_Следующий вопрос — 3 ⭐_", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("❌ Король занят. Попробуйте позже.")
+        return
+
+    # Остальные — 3 звезды
+    context.user_data["pending_message"] = text
     try:
         await context.bot.send_invoice(
             chat_id=update.effective_chat.id,
-            title="💬 Ответ ИИ",
-            description="Получить ответ от ИИ на ваш вопрос",
+            title="👑 Ответ Короля",
+            description="Получить мудрый ответ от Короля",
             payload="msg_payment",
-            provider_token="",   # Пустая строка для Telegram Stars
+            provider_token="",
             currency="XTR",
-            prices=[LabeledPrice(label="Ответ ИИ", amount=1)],
+            prices=[LabeledPrice(label="Ответ Короля", amount=3)],
         )
     except Exception as e:
         logger.error(f"Message invoice error: {e}")
         await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
+# ========== Успешная оплата за СООБЩЕНИЕ ==========
 async def paid_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    store = get_user_store(user_id)
+
     user_text = context.user_data.get("pending_message", "")
     if not user_text:
         await update.message.reply_text("❌ Не удалось найти ваш вопрос. Напишите снова.")
         return
-    await update.message.reply_text("⏳ Думаю...")
+
+    await update.message.reply_text("👑 Король думает...", parse_mode="Markdown")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    result = ask_ai(user_text)
+
+    result = ask_ai(user_text, system=KING_SYSTEM_PROMPT)
+    store["msg_count"] += 1
+
     if result:
-        await update.message.reply_text(result)
+        await update.message.reply_text(f"👑 *Король отвечает:*\n\n{result}", parse_mode="Markdown")
     else:
-        await update.message.reply_text("❌ Ошибка ИИ. Попробуйте ещё раз.")
+        await update.message.reply_text("❌ Король занят. Попробуйте позже.")
 
 
+# ========== Отмена ==========
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено. Используйте /newbot чтобы начать заново.")
     return ConversationHandler.END
 
 
+# ========== Запуск ==========
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -245,6 +325,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newbot", newbot))
+    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid_message))
