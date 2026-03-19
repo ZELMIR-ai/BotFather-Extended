@@ -1,15 +1,12 @@
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram import Update, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, PreCheckoutQueryHandler,
-    filters, ContextTypes, ConversationHandler
+    PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
 )
 from groq import Groq
 
-# ==============================
-# ВСТАВЬТЕ ВАШИ КЛЮЧИ СЮДА
 # ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -19,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 client = Groq(api_key=GROQ_API_KEY)
 
 # Состояния диалога
-CHOOSE_TYPE, WAIT_PAYMENT, ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES, GENERATING = range(6)
+WAIT_PAYMENT, ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES = range(4)
 
 # Цена в Stars
 PRICE_STARS = 3
@@ -48,57 +45,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== /newbot ==========
 async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🤖 TG Бот", callback_data="tgbot")],
-        [InlineKeyboardButton("🧠 ИИ Бот", callback_data="aibot")],
-        [InlineKeyboardButton("🌐 Сайт", callback_data="site")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "🛠 *Что хотите создать?*\n\n"
-        "Выберите тип — каждый стоит *3 Stars* ⭐",
-        reply_markup=reply_markup,
+        "Каждый стоит *3 Stars* ⭐\n\n"
+        "/tgbot — 🤖 Telegram бот\n"
+        "/aibot — 🧠 ИИ бот\n"
+        "/site — 🌐 Сайт",
         parse_mode="Markdown"
     )
-    return CHOOSE_TYPE
 
 
-# ========== Выбор типа ==========
-async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    product_type = query.data
-    context.user_data["product_type"] = product_type
-    label = PRODUCT_LABELS[product_type]
-
-    # Отправляем инвойс на оплату Stars
+# ========== /tgbot ==========
+async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["product_type"] = "tgbot"
     await context.bot.send_invoice(
         chat_id=update.effective_chat.id,
-        title=f"Создание: {label}",
-        description=f"ИИ создаст для вас {label} по вашим требованиям",
-        payload=f"create_{product_type}",
-        currency="XTR",  # XTR = Telegram Stars
-        prices=[LabeledPrice(label=label, amount=PRICE_STARS)],
+        title="Создание: 🤖 Telegram бот",
+        description="ИИ создаст для вас Telegram бота по вашим требованиям",
+        payload="create_tgbot",
+        currency="XTR",
+        prices=[LabeledPrice(label="🤖 TG Бот", amount=PRICE_STARS)],
+    )
+    return WAIT_PAYMENT
+
+
+# ========== /aibot ==========
+async def aibot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["product_type"] = "aibot"
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="Создание: 🧠 ИИ бот",
+        description="ИИ создаст для вас ИИ бота по вашим требованиям",
+        payload="create_aibot",
+        currency="XTR",
+        prices=[LabeledPrice(label="🧠 ИИ Бот", amount=PRICE_STARS)],
+    )
+    return WAIT_PAYMENT
+
+
+# ========== /site ==========
+async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["product_type"] = "site"
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="Создание: 🌐 Сайт",
+        description="ИИ создаст для вас одностраничный сайт по вашим требованиям",
+        payload="create_site",
+        currency="XTR",
+        prices=[LabeledPrice(label="🌐 Сайт", amount=PRICE_STARS)],
     )
     return WAIT_PAYMENT
 
 
 # ========== Проверка оплаты ==========
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.pre_checkout_query
-    await query.answer(ok=True)
+    await update.pre_checkout_query.answer(ok=True)
 
 
 # ========== Успешная оплата ==========
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_type = context.user_data.get("product_type", "tgbot")
     label = PRODUCT_LABELS[product_type]
-
     await update.message.reply_text(
         f"✅ Оплата {PRICE_STARS} Stars получена!\n\n"
         f"Начинаем создание: *{label}*\n\n"
-        f"📝 Как будет называться ваш {label}?",
+        f"📝 Как будет называться ваш продукт?",
         parse_mode="Markdown"
     )
     return ASK_NAME
@@ -121,13 +132,13 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "⚙️ Какие *дополнительные функции* нужны?\n\n"
         "Например: _кнопки, меню, оплата, регистрация, каталог..._\n"
-        "Или напишите *'нет'* если базового функционала достаточно.",
+        "Или напишите *нет* если базового достаточно.",
         parse_mode="Markdown"
     )
     return ASK_FEATURES
 
 
-# ========== Функции → Генерация ==========
+# ========== Генерация ==========
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["features"] = update.message.text
 
@@ -137,35 +148,34 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_type = context.user_data["product_type"]
     label = PRODUCT_LABELS[product_type]
 
-    await update.message.reply_text("⏳ Генерирую для вас код... Это займёт 10-20 секунд!")
+    await update.message.reply_text("⏳ Генерирую для вас код... Подождите 10-20 секунд!")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    # Промпты для разных типов
     prompts = {
         "tgbot": f"""Создай готовый код Telegram бота на Python с библиотекой python-telegram-bot.
-Название бота: {name}
+Название: {name}
 Описание: {description}
-Дополнительные функции: {features}
-Дай полный рабочий код с комментариями на русском языке. Включи README с инструкцией по запуску.""",
+Функции: {features}
+Дай полный рабочий код с комментариями на русском языке и README с инструкцией.""",
 
-        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с библиотекой python-telegram-bot и Groq API (модель llama3-8b-8192).
-Название бота: {name}
+        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и Groq API (llama3-8b-8192).
+Название: {name}
 Описание: {description}
-Дополнительные функции: {features}
-Дай полный рабочий код с комментариями на русском языке. Включи README с инструкцией по запуску.""",
+Функции: {features}
+Дай полный рабочий код с комментариями на русском языке и README с инструкцией.""",
 
         "site": f"""Создай красивый одностраничный сайт на HTML/CSS/JS.
 Название: {name}
 Описание: {description}
-Дополнительные функции: {features}
-Дай полный рабочий HTML файл со встроенным CSS и JS. Сделай современный дизайн.""",
+Функции: {features}
+Дай полный рабочий HTML файл со встроенным CSS и JS. Современный дизайн.""",
     }
 
     try:
         response = client.chat.completions.create(
             model="llama3-8b-8192",
             messages=[
-                {"role": "system", "content": "Ты опытный разработчик. Пиши чистый, рабочий код с комментариями на русском языке."},
+                {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском."},
                 {"role": "user", "content": prompts[product_type]}
             ],
             max_tokens=3000,
@@ -173,7 +183,6 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         result = response.choices[0].message.content
 
-        # Разбиваем на части если текст длинный (лимит Telegram 4096 символов)
         if len(result) > 4000:
             parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
             for i, part in enumerate(parts):
@@ -189,13 +198,12 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             f"🎉 Ваш *{label}* создан!\n\n"
-            "Если нужны правки или хотите создать ещё — используйте /newbot\n\n"
-            "По вопросам: напишите владельцу бота.",
+            "Хотите создать ещё? Используйте /newbot",
             parse_mode="Markdown"
         )
 
     except Exception as e:
-        await update.message.reply_text("❌ Ошибка генерации. Попробуйте ещё раз через /newbot")
+        await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
         logging.error(f"Groq error: {e}")
 
     return ConversationHandler.END
@@ -211,20 +219,22 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("newbot", newbot)],
-        states={
-            CHOOSE_TYPE: [CallbackQueryHandler(choose_type)],
-            WAIT_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment)],
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
-            ASK_FEATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
+    # Обработчик диалога для каждой команды
+    for cmd, handler in [("tgbot", tgbot), ("aibot", aibot_cmd), ("site", site_cmd)]:
+        conv = ConversationHandler(
+            entry_points=[CommandHandler(cmd, handler)],
+            states={
+                WAIT_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment)],
+                ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
+                ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
+                ASK_FEATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate)],
+            },
+            fallbacks=[CommandHandler("cancel", cancel)],
+        )
+        app.add_handler(conv)
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("newbot", newbot))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
 
     print("✅ BotFather Extended запущен!")
@@ -233,3 +243,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
