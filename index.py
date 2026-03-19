@@ -35,7 +35,7 @@ def ask_ai(prompt: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "mistralai/mistral-7b-instruct:free",
+                "model": "openrouter/free",
                 "messages": [
                     {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."},
                     {"role": "user", "content": prompt}
