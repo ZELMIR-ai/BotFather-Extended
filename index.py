@@ -35,7 +35,7 @@ def ask_ai(prompt: str) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "openrouter/free",
+                "model": "google/gemini-2.0-flash-001",
                 "messages": [
                     {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."},
                     {"role": "user", "content": prompt}
