@@ -27,7 +27,6 @@ PRODUCT_LABELS = {
 
 
 def ask_ai(prompt: str) -> str:
-    """Запрос к OpenRouter API"""
     try:
         response = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
@@ -79,22 +78,7 @@ async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ========== Оплата за обычное сообщение (1 звезда) ==========
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Любое текстовое сообщение вне диалога — запрашиваем 1 звезду"""
-    context.user_data["pending_message"] = update.message.text
-
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="💬 Ответ ИИ",
-        description="Получить ответ от ИИ на ваш вопрос",
-        payload="msg_payment",
-        currency="XTR",
-        prices=[LabeledPrice(label="Ответ ИИ", amount=1)],
-    )
-
-
-# ========== Начало диалога для кода ==========
+# ========== Начало диалога ==========
 async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
     context.user_data["product_type"] = product_type
     label = PRODUCT_LABELS[product_type]
@@ -104,7 +88,6 @@ async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type
         parse_mode="Markdown"
     )
     return ASK_NAME
-
 
 async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await begin(update, context, "tgbot")
@@ -139,7 +122,7 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_FEATURES
 
 
-# ========== Запрос оплаты за код (3 звезды) ==========
+# ========== Запрос оплаты за код ==========
 async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["features"] = update.message.text
     product_type = context.user_data["product_type"]
@@ -156,93 +139,86 @@ async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYP
     return WAIT_CODE_PAYMENT
 
 
-# ========== PreCheckout (обязательно подтверждаем) ==========
-async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
+# ========== Успешная оплата за код ==========
+async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    product_type = context.user_data.get("product_type", "tgbot")
+    label = PRODUCT_LABELS.get(product_type, "продукт")
+    name = context.user_data.get("name", "")
+    description = context.user_data.get("description", "")
+    features = context.user_data.get("features", "")
 
+    await update.message.reply_text("⏳ Генерирую код... Подождите 20-30 секунд!")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-# ========== Успешная оплата ==========
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    payload = update.message.successful_payment.invoice_payload
+    prompts = {
+        "tgbot": f"Создай готовый код Telegram бота на Python с библиотекой python-telegram-bot.\nНазвание: {name}\nОписание: {description}\nФункции: {features}\nДай полный рабочий код с комментариями на русском языке и README.",
+        "aibot": f"Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и OpenAI-совместимым API.\nНазвание: {name}\nОписание: {description}\nФункции: {features}\nДай полный рабочий код с комментариями на русском языке и README.",
+        "site":  f"Создай красивый современный одностраничный сайт на HTML/CSS/JS.\nНазвание: {name}\nОписание: {description}\nФункции: {features}\nДай один полный HTML файл со встроенным CSS и JS.",
+    }
 
-    # --- Оплата за обычное сообщение ---
-    if payload == "msg_payment":
-        user_text = context.user_data.get("pending_message", "")
-        if not user_text:
-            await update.message.reply_text("❌ Не удалось найти ваш вопрос. Напишите снова.")
-            return
+    result = ask_ai(prompts[product_type])
 
-        await update.message.reply_text("⏳ Думаю...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    if not result:
+        await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
+        return ConversationHandler.END
 
-        result = ask_ai(user_text)
-        if result:
-            await update.message.reply_text(result)
-        else:
-            await update.message.reply_text("❌ Ошибка ИИ. Попробуйте ещё раз.")
-        return
-
-    # --- Оплата за генерацию кода ---
-    if payload.startswith("code_"):
-        product_type = payload.replace("code_", "")
-        label = PRODUCT_LABELS.get(product_type, "продукт")
-
-        name = context.user_data.get("name", "")
-        description = context.user_data.get("description", "")
-        features = context.user_data.get("features", "")
-
-        await update.message.reply_text("⏳ Генерирую код... Подождите 20-30 секунд!")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-        prompts = {
-            "tgbot": f"""Создай готовый код Telegram бота на Python с библиотекой python-telegram-bot.
-Название: {name}
-Описание: {description}
-Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
-
-            "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и OpenAI-совместимым API.
-Название: {name}
-Описание: {description}
-Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
-
-            "site": f"""Создай красивый современный одностраничный сайт на HTML/CSS/JS.
-Название: {name}
-Описание: {description}
-Функции: {features}
-Дай один полный HTML файл со встроенным CSS и JS. Современный красивый дизайн.""",
-        }
-
-        result = ask_ai(prompts[product_type])
-
-        if not result:
-            await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
-            return
-
-        if len(result) > 4000:
-            parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
-            for i, part in enumerate(parts):
-                await update.message.reply_text(
-                    f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
-                    parse_mode="Markdown"
-                )
-        else:
+    if len(result) > 4000:
+        parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
+        for i, part in enumerate(parts):
             await update.message.reply_text(
-                f"✅ *{label} готов!*\n\n```\n{result}\n```",
+                f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
                 parse_mode="Markdown"
             )
-
+    else:
         await update.message.reply_text(
-            f"🎉 Ваш *{label}* создан!\n\nХотите создать ещё? Используйте /newbot",
+            f"✅ *{label} готов!*\n\n```\n{result}\n```",
             parse_mode="Markdown"
         )
+
+    await update.message.reply_text(
+        f"🎉 Ваш *{label}* создан!\n\nХотите создать ещё? Используйте /newbot",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
 
 
 # ========== Отмена ==========
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Отменено. Используйте /newbot чтобы начать заново.")
     return ConversationHandler.END
+
+
+# ========== Оплата за обычное сообщение (1 звезда) ==========
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["pending_message"] = update.message.text
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="💬 Ответ ИИ",
+        description="Получить ответ от ИИ на ваш вопрос",
+        payload="msg_payment",
+        currency="XTR",
+        prices=[LabeledPrice(label="Ответ ИИ", amount=1)],
+    )
+
+
+# ========== PreCheckout ==========
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+
+# ========== Успешная оплата за сообщение ==========
+async def paid_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = context.user_data.get("pending_message", "")
+    if not user_text:
+        await update.message.reply_text("❌ Не удалось найти ваш вопрос. Напишите снова.")
+        return
+    await update.message.reply_text("⏳ Думаю...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = ask_ai(user_text)
+    if result:
+        await update.message.reply_text(result)
+    else:
+        await update.message.reply_text("❌ Ошибка ИИ. Попробуйте ещё раз.")
 
 
 # ========== Запуск ==========
@@ -257,7 +233,7 @@ def main():
                 ASK_NAME:          [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
                 ASK_DESCRIPTION:   [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
                 ASK_FEATURES:      [MessageHandler(filters.TEXT & ~filters.COMMAND, request_code_payment)],
-                WAIT_CODE_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment)],
+                WAIT_CODE_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, paid_code)],
             },
             fallbacks=[CommandHandler("cancel", cancel)],
         )
@@ -267,9 +243,10 @@ def main():
     app.add_handler(CommandHandler("newbot", newbot))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
 
-    # Обычные сообщения — 1 звезда (вне диалога)
+    # Обычные сообщения — 1 звезда
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    # Оплата за сообщение (вне диалога)
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid_message))
 
     print("✅ BotFather Extended запущен!")
     app.run_polling()
