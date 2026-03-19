@@ -1,21 +1,28 @@
 import os
 import logging
-import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, PreCheckoutQueryHandler,
     filters, ContextTypes, ConversationHandler
 )
+from groq import Groq
 
 # ==============================
+# КЛЮЧИ (берутся из Railway переменных)
+# ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # ==============================
 
 logging.basicConfig(level=logging.INFO)
+client = Groq(api_key=GROQ_API_KEY)
 
 # Состояния диалога
-ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES = range(3)
+CHOOSE_TYPE, WAIT_PAYMENT, ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES, GENERATING = range(6)
+
+# Цена в Stars
+PRICE_STARS = 3
 
 # Типы продуктов
 PRODUCT_LABELS = {
@@ -23,32 +30,6 @@ PRODUCT_LABELS = {
     "aibot": "🧠 ИИ бот",
     "site": "🌐 Сайт",
 }
-
-
-def ask_ai(prompt: str) -> str:
-    """Запрос к OpenRouter API"""
-    try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "google/gemini-2.0-flash-001",
-                "messages": [
-                    {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 3000,
-            },
-            timeout=60
-        )
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logging.error(f"OpenRouter error: {e}")
-        return None
 
 
 # ========== /start ==========
@@ -59,44 +40,68 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 Telegram бота\n"
         "🧠 ИИ бота\n"
         "🌐 Одностраничный сайт\n\n"
-        "Используйте /newbot чтобы начать!",
+        "Используйте команду /newbot чтобы начать.\n"
+        "Стоимость создания: всего *3 Stars* ⭐",
         parse_mode="Markdown"
     )
 
 
 # ========== /newbot ==========
 async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🤖 TG Бот", callback_data="tgbot")],
+        [InlineKeyboardButton("🧠 ИИ Бот", callback_data="aibot")],
+        [InlineKeyboardButton("🌐 Сайт", callback_data="site")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "🛠 *Что хотите создать?*\n\n"
-        "/tgbot — 🤖 Telegram бот\n"
-        "/aibot — 🧠 ИИ бот\n"
-        "/site — 🌐 Сайт",
+        "Выберите тип — каждый стоит *3 Stars* ⭐",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+    return CHOOSE_TYPE
 
 
-# ========== Начало диалога ==========
-async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
+# ========== Выбор типа ==========
+async def choose_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    product_type = query.data
     context.user_data["product_type"] = product_type
     label = PRODUCT_LABELS[product_type]
+
+    # Отправляем инвойс на оплату Stars
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title=f"Создание: {label}",
+        description=f"ИИ создаст для вас {label} по вашим требованиям",
+        payload=f"create_{product_type}",
+        currency="XTR",  # XTR = Telegram Stars
+        prices=[LabeledPrice(label=label, amount=PRICE_STARS)],
+    )
+    return WAIT_PAYMENT
+
+
+# ========== Проверка оплаты (ВАЖНО: должен быть и здесь и снаружи) ==========
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+
+# ========== Успешная оплата ==========
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    product_type = context.user_data.get("product_type", "tgbot")
+    label = PRODUCT_LABELS[product_type]
+
     await update.message.reply_text(
-        f"✅ Отлично! Создаём *{label}*\n\n"
-        f"📝 Как будет называться ваш продукт?",
+        f"✅ Оплата {PRICE_STARS} Stars получена!\n\n"
+        f"Начинаем создание: *{label}*\n\n"
+        f"📝 Как будет называться ваш {label}?",
         parse_mode="Markdown"
     )
     return ASK_NAME
-
-
-async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await begin(update, context, "tgbot")
-
-
-async def aibot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await begin(update, context, "aibot")
-
-
-async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await begin(update, context, "site")
 
 
 # ========== Имя ==========
@@ -104,7 +109,7 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
     await update.message.reply_text(
         "✏️ Отлично! Теперь опишите *что должен делать* ваш продукт?\n\n"
-        "Например: _отвечать на вопросы, принимать заказы, показывать меню..._",
+        "Например: _отвечать на вопросы клиентов, принимать заказы, показывать меню..._",
         parse_mode="Markdown"
     )
     return ASK_DESCRIPTION
@@ -115,14 +120,14 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = update.message.text
     await update.message.reply_text(
         "⚙️ Какие *дополнительные функции* нужны?\n\n"
-        "Например: _кнопки, меню, оплата, регистрация..._\n"
-        "Или напишите *нет* если базового достаточно.",
+        "Например: _кнопки, меню, оплата, регистрация, каталог..._\n"
+        "Или напишите *'нет'* если базового функционала достаточно.",
         parse_mode="Markdown"
     )
     return ASK_FEATURES
 
 
-# ========== Генерация ==========
+# ========== Функции → Генерация ==========
 async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["features"] = update.message.text
 
@@ -132,52 +137,66 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_type = context.user_data["product_type"]
     label = PRODUCT_LABELS[product_type]
 
-    await update.message.reply_text("⏳ Генерирую код... Подождите 20-30 секунд!")
+    await update.message.reply_text("⏳ Генерирую для вас код... Это займёт 10-20 секунд!")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
+    # Промпты для разных типов
     prompts = {
         "tgbot": f"""Создай готовый код Telegram бота на Python с библиотекой python-telegram-bot.
-Название: {name}
+Название бота: {name}
 Описание: {description}
-Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
+Дополнительные функции: {features}
+Дай полный рабочий код с комментариями на русском языке. Включи README с инструкцией по запуску.""",
 
-        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и OpenAI-совместимым API.
-Название: {name}
+        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с библиотекой python-telegram-bot и Groq API (модель llama3-8b-8192).
+Название бота: {name}
 Описание: {description}
-Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
+Дополнительные функции: {features}
+Дай полный рабочий код с комментариями на русском языке. Включи README с инструкцией по запуску.""",
 
-        "site": f"""Создай красивый современный одностраничный сайт на HTML/CSS/JS.
+        "site": f"""Создай красивый одностраничный сайт на HTML/CSS/JS.
 Название: {name}
 Описание: {description}
-Функции: {features}
-Дай один полный HTML файл со встроенным CSS и JS. Современный красивый дизайн.""",
+Дополнительные функции: {features}
+Дай полный рабочий HTML файл со встроенным CSS и JS. Сделай современный дизайн.""",
     }
 
-    result = ask_ai(prompts[product_type])
+    try:
+        response = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {"role": "system", "content": "Ты опытный разработчик. Пиши чистый, рабочий код с комментариями на русском языке."},
+                {"role": "user", "content": prompts[product_type]}
+            ],
+            max_tokens=3000,
+        )
 
-    if not result:
-        await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
-        return ConversationHandler.END
+        result = response.choices[0].message.content
 
-    if len(result) > 4000:
-        parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
-        for i, part in enumerate(parts):
+        # Разбиваем на части если текст длинный (лимит Telegram 4096 символов)
+        if len(result) > 4000:
+            parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
+            for i, part in enumerate(parts):
+                await update.message.reply_text(
+                    f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
+                    parse_mode="Markdown"
+                )
+        else:
             await update.message.reply_text(
-                f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
+                f"✅ *{label} готов!*\n\n```\n{result}\n```",
                 parse_mode="Markdown"
             )
-    else:
+
         await update.message.reply_text(
-            f"✅ *{label} готов!*\n\n```\n{result}\n```",
+            f"🎉 Ваш *{label}* создан!\n\n"
+            "Если нужны правки или хотите создать ещё — используйте /newbot\n\n"
+            "По вопросам: напишите владельцу бота.",
             parse_mode="Markdown"
         )
 
-    await update.message.reply_text(
-        f"🎉 Ваш *{label}* создан!\n\nХотите создать ещё? Используйте /newbot",
-        parse_mode="Markdown"
-    )
+    except Exception as e:
+        await update.message.reply_text("❌ Ошибка генерации. Попробуйте ещё раз через /newbot")
+        logging.error(f"Groq error: {e}")
 
     return ConversationHandler.END
 
@@ -192,20 +211,26 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    for cmd, handler in [("tgbot", tgbot), ("aibot", aibot_cmd), ("site", site_cmd)]:
-        conv = ConversationHandler(
-            entry_points=[CommandHandler(cmd, handler)],
-            states={
-                ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-                ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
-                ASK_FEATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate)],
-            },
-            fallbacks=[CommandHandler("cancel", cancel)],
-        )
-        app.add_handler(conv)
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("newbot", newbot)],
+        states={
+            CHOOSE_TYPE: [CallbackQueryHandler(choose_type)],
+            # ✅ ИСПРАВЛЕНИЕ: PreCheckoutQueryHandler внутри ConversationHandler
+            WAIT_PAYMENT: [
+                PreCheckoutQueryHandler(precheckout),
+                MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment),
+            ],
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
+            ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
+            ASK_FEATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("newbot", newbot))
+    # ✅ PreCheckoutQueryHandler также снаружи — на всякий случай
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(conv_handler)
 
     print("✅ BotFather Extended запущен!")
     app.run_polling()
