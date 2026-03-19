@@ -1,10 +1,10 @@
 import os
 import logging
 import requests
-from telegram import Update, LabeledPrice
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
+    filters, ContextTypes, ConversationHandler
 )
 
 # ==============================
@@ -15,10 +15,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 logging.basicConfig(level=logging.INFO)
 
 # Состояния диалога
-WAIT_PAYMENT, ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES = range(4)
-
-# Цена в Stars
-PRICE_STARS = 3
+ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES = range(3)
 
 # Типы продуктов
 PRODUCT_LABELS = {
@@ -62,8 +59,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 Telegram бота\n"
         "🧠 ИИ бота\n"
         "🌐 Одностраничный сайт\n\n"
-        "Используйте команду /newbot чтобы начать.\n"
-        "Стоимость создания: всего *3 Stars* ⭐",
+        "Используйте /newbot чтобы начать!",
         parse_mode="Markdown"
     )
 
@@ -72,7 +68,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛠 *Что хотите создать?*\n\n"
-        "Каждый стоит *3 Stars* ⭐\n\n"
         "/tgbot — 🤖 Telegram бот\n"
         "/aibot — 🧠 ИИ бот\n"
         "/site — 🌐 Сайт",
@@ -80,51 +75,28 @@ async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ========== Отправка инвойса ==========
-async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
-    label = PRODUCT_LABELS[product_type]
+# ========== Начало диалога ==========
+async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
     context.user_data["product_type"] = product_type
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title=f"Создание: {label}",
-        description=f"ИИ создаст для вас {label} по вашим требованиям",
-        payload=f"create_{product_type}",
-        currency="XTR",
-        prices=[LabeledPrice(label=label, amount=PRICE_STARS)],
-    )
-
-
-async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_invoice(update, context, "tgbot")
-    return WAIT_PAYMENT
-
-
-async def aibot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_invoice(update, context, "aibot")
-    return WAIT_PAYMENT
-
-
-async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_invoice(update, context, "site")
-    return WAIT_PAYMENT
-
-
-# ========== Проверка оплаты ==========
-async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
-
-
-# ========== Успешная оплата ==========
-async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    product_type = context.user_data.get("product_type", "tgbot")
     label = PRODUCT_LABELS[product_type]
     await update.message.reply_text(
-        f"✅ Оплата {PRICE_STARS} Stars получена!\n\n"
-        f"Начинаем создание: *{label}*\n\n"
+        f"✅ Отлично! Создаём *{label}*\n\n"
         f"📝 Как будет называться ваш продукт?",
         parse_mode="Markdown"
     )
     return ASK_NAME
+
+
+async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await begin(update, context, "tgbot")
+
+
+async def aibot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await begin(update, context, "aibot")
+
+
+async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await begin(update, context, "site")
 
 
 # ========== Имя ==========
@@ -224,7 +196,6 @@ def main():
         conv = ConversationHandler(
             entry_points=[CommandHandler(cmd, handler)],
             states={
-                WAIT_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment)],
                 ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
                 ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)],
                 ASK_FEATURES: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate)],
@@ -235,7 +206,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newbot", newbot))
-    app.add_handler(PreCheckoutQueryHandler(precheckout))
 
     print("✅ BotFather Extended запущен!")
     app.run_polling()
