@@ -13,12 +13,15 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # ==============================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # Состояния диалога
 ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES, WAIT_CODE_PAYMENT = range(4)
 
-# Типы продуктов
 PRODUCT_LABELS = {
     "tgbot": "🤖 Telegram бот",
     "aibot": "🧠 ИИ бот",
@@ -47,7 +50,7 @@ def ask_ai(prompt: str) -> str:
         data = response.json()
         return data["choices"][0]["message"]["content"]
     except Exception as e:
-        logging.error(f"OpenRouter error: {e}")
+        logger.error(f"OpenRouter error: {e}")
         return None
 
 
@@ -82,6 +85,7 @@ async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def begin(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
     context.user_data["product_type"] = product_type
     label = PRODUCT_LABELS[product_type]
+    logger.info(f"User started: {product_type}")
     await update.message.reply_text(
         f"✅ Создаём *{label}* — стоимость *3 ⭐*\n\n"
         f"📝 Как будет называться ваш продукт?",
@@ -102,6 +106,7 @@ async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== Имя ==========
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
+    logger.info(f"Name: {update.message.text}")
     await update.message.reply_text(
         "✏️ Отлично! Теперь опишите *что должен делать* ваш продукт?\n\n"
         "Например: _отвечать на вопросы, принимать заказы, показывать меню..._",
@@ -113,6 +118,7 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== Описание ==========
 async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = update.message.text
+    logger.info(f"Description: {update.message.text}")
     await update.message.reply_text(
         "⚙️ Какие *дополнительные функции* нужны?\n\n"
         "Например: _кнопки, меню, оплата, регистрация..._\n"
@@ -122,25 +128,40 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_FEATURES
 
 
-# ========== Запрос оплаты за код ==========
+# ========== Отправка инвойса ==========
 async def request_code_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["features"] = update.message.text
     product_type = context.user_data["product_type"]
     label = PRODUCT_LABELS[product_type]
+    logger.info(f"Sending invoice for {product_type}")
 
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title=f"Создание: {label}",
-        description=f"ИИ создаст для вас {label} по вашим требованиям",
-        payload=f"code_{product_type}",
-        currency="XTR",
-        prices=[LabeledPrice(label=label, amount=3)],
-    )
+    try:
+        await context.bot.send_invoice(
+            chat_id=update.effective_chat.id,
+            title=f"Создание: {label}",
+            description=f"ИИ создаст для вас {label} по вашим требованиям",
+            payload=f"code_{product_type}",
+            currency="XTR",
+            prices=[LabeledPrice(label=label, amount=3)],
+        )
+        logger.info("Invoice sent successfully")
+    except Exception as e:
+        logger.error(f"Invoice error: {e}")
+        await update.message.reply_text(f"❌ Ошибка при создании счёта: {e}")
+        return ConversationHandler.END
+
     return WAIT_CODE_PAYMENT
 
 
-# ========== Успешная оплата за код ==========
+# ========== PreCheckout ==========
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("PreCheckout received")
+    await update.pre_checkout_query.answer(ok=True)
+
+
+# ========== Успешная оплата за КОД ==========
 async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("paid_code triggered")
     product_type = context.user_data.get("product_type", "tgbot")
     label = PRODUCT_LABELS.get(product_type, "продукт")
     name = context.user_data.get("name", "")
@@ -182,32 +203,27 @@ async def paid_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ========== Отмена ==========
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Отменено. Используйте /newbot чтобы начать заново.")
-    return ConversationHandler.END
-
-
-# ========== Оплата за обычное сообщение (1 звезда) ==========
+# ========== Обычное сообщение — 1 звезда ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_message"] = update.message.text
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="💬 Ответ ИИ",
-        description="Получить ответ от ИИ на ваш вопрос",
-        payload="msg_payment",
-        currency="XTR",
-        prices=[LabeledPrice(label="Ответ ИИ", amount=1)],
-    )
+    logger.info(f"Message payment requested: {update.message.text}")
+    try:
+        await context.bot.send_invoice(
+            chat_id=update.effective_chat.id,
+            title="💬 Ответ ИИ",
+            description="Получить ответ от ИИ на ваш вопрос",
+            payload="msg_payment",
+            currency="XTR",
+            prices=[LabeledPrice(label="Ответ ИИ", amount=1)],
+        )
+    except Exception as e:
+        logger.error(f"Message invoice error: {e}")
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 
-# ========== PreCheckout ==========
-async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.pre_checkout_query.answer(ok=True)
-
-
-# ========== Успешная оплата за сообщение ==========
+# ========== Успешная оплата за СООБЩЕНИЕ ==========
 async def paid_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("paid_message triggered")
     user_text = context.user_data.get("pending_message", "")
     if not user_text:
         await update.message.reply_text("❌ Не удалось найти ваш вопрос. Напишите снова.")
@@ -221,11 +237,16 @@ async def paid_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Ошибка ИИ. Попробуйте ещё раз.")
 
 
+# ========== Отмена ==========
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Отменено. Используйте /newbot чтобы начать заново.")
+    return ConversationHandler.END
+
+
 # ========== Запуск ==========
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Хендлеры для генерации кода (3 звезды)
     for cmd, handler in [("tgbot", tgbot), ("aibot", aibot_cmd), ("site", site_cmd)]:
         conv = ConversationHandler(
             entry_points=[CommandHandler(cmd, handler)],
@@ -236,16 +257,14 @@ def main():
                 WAIT_CODE_PAYMENT: [MessageHandler(filters.SUCCESSFUL_PAYMENT, paid_code)],
             },
             fallbacks=[CommandHandler("cancel", cancel)],
+            allow_reentry=True,
         )
         app.add_handler(conv)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newbot", newbot))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
-
-    # Обычные сообщения — 1 звезда
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    # Оплата за сообщение (вне диалога)
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid_message))
 
     print("✅ BotFather Extended запущен!")
