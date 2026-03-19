@@ -1,19 +1,18 @@
 import os
 import logging
+import requests
 from telegram import Update, LabeledPrice
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
 )
-from groq import Groq
 
 # ==============================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # ==============================
 
 logging.basicConfig(level=logging.INFO)
-client = Groq(api_key=GROQ_API_KEY)
 
 # Состояния диалога
 WAIT_PAYMENT, ASK_NAME, ASK_DESCRIPTION, ASK_FEATURES = range(4)
@@ -27,6 +26,32 @@ PRODUCT_LABELS = {
     "aibot": "🧠 ИИ бот",
     "site": "🌐 Сайт",
 }
+
+
+def ask_ai(prompt: str) -> str:
+    """Запрос к OpenRouter API"""
+    try:
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "mistralai/mistral-7b-instruct:free",
+                "messages": [
+                    {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском языке."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 3000,
+            },
+            timeout=60
+        )
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        logging.error(f"OpenRouter error: {e}")
+        return None
 
 
 # ========== /start ==========
@@ -55,45 +80,32 @@ async def newbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ========== /tgbot ==========
+# ========== Отправка инвойса ==========
+async def send_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, product_type: str):
+    label = PRODUCT_LABELS[product_type]
+    context.user_data["product_type"] = product_type
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title=f"Создание: {label}",
+        description=f"ИИ создаст для вас {label} по вашим требованиям",
+        payload=f"create_{product_type}",
+        currency="XTR",
+        prices=[LabeledPrice(label=label, amount=PRICE_STARS)],
+    )
+
+
 async def tgbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["product_type"] = "tgbot"
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="Создание: 🤖 Telegram бот",
-        description="ИИ создаст для вас Telegram бота по вашим требованиям",
-        payload="create_tgbot",
-        currency="XTR",
-        prices=[LabeledPrice(label="🤖 TG Бот", amount=PRICE_STARS)],
-    )
+    await send_invoice(update, context, "tgbot")
     return WAIT_PAYMENT
 
 
-# ========== /aibot ==========
 async def aibot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["product_type"] = "aibot"
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="Создание: 🧠 ИИ бот",
-        description="ИИ создаст для вас ИИ бота по вашим требованиям",
-        payload="create_aibot",
-        currency="XTR",
-        prices=[LabeledPrice(label="🧠 ИИ Бот", amount=PRICE_STARS)],
-    )
+    await send_invoice(update, context, "aibot")
     return WAIT_PAYMENT
 
 
-# ========== /site ==========
 async def site_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["product_type"] = "site"
-    await context.bot.send_invoice(
-        chat_id=update.effective_chat.id,
-        title="Создание: 🌐 Сайт",
-        description="ИИ создаст для вас одностраничный сайт по вашим требованиям",
-        payload="create_site",
-        currency="XTR",
-        prices=[LabeledPrice(label="🌐 Сайт", amount=PRICE_STARS)],
-    )
+    await send_invoice(update, context, "site")
     return WAIT_PAYMENT
 
 
@@ -120,7 +132,7 @@ async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text
     await update.message.reply_text(
         "✏️ Отлично! Теперь опишите *что должен делать* ваш продукт?\n\n"
-        "Например: _отвечать на вопросы клиентов, принимать заказы, показывать меню..._",
+        "Например: _отвечать на вопросы, принимать заказы, показывать меню..._",
         parse_mode="Markdown"
     )
     return ASK_DESCRIPTION
@@ -131,7 +143,7 @@ async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = update.message.text
     await update.message.reply_text(
         "⚙️ Какие *дополнительные функции* нужны?\n\n"
-        "Например: _кнопки, меню, оплата, регистрация, каталог..._\n"
+        "Например: _кнопки, меню, оплата, регистрация..._\n"
         "Или напишите *нет* если базового достаточно.",
         parse_mode="Markdown"
     )
@@ -148,7 +160,7 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     product_type = context.user_data["product_type"]
     label = PRODUCT_LABELS[product_type]
 
-    await update.message.reply_text("⏳ Генерирую для вас код... Подождите 10-20 секунд!")
+    await update.message.reply_text("⏳ Генерирую код... Подождите 20-30 секунд!")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     prompts = {
@@ -156,55 +168,44 @@ async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Название: {name}
 Описание: {description}
 Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией.""",
+Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
 
-        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и Groq API (llama3-8b-8192).
+        "aibot": f"""Создай готовый код Telegram ИИ-бота на Python с python-telegram-bot и OpenAI-совместимым API.
 Название: {name}
 Описание: {description}
 Функции: {features}
-Дай полный рабочий код с комментариями на русском языке и README с инструкцией.""",
+Дай полный рабочий код с комментариями на русском языке и README с инструкцией по запуску.""",
 
-        "site": f"""Создай красивый одностраничный сайт на HTML/CSS/JS.
+        "site": f"""Создай красивый современный одностраничный сайт на HTML/CSS/JS.
 Название: {name}
 Описание: {description}
 Функции: {features}
-Дай полный рабочий HTML файл со встроенным CSS и JS. Современный дизайн.""",
+Дай один полный HTML файл со встроенным CSS и JS. Современный красивый дизайн.""",
     }
 
-    try:
-        response = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[
-                {"role": "system", "content": "Ты опытный разработчик. Пиши чистый рабочий код с комментариями на русском."},
-                {"role": "user", "content": prompts[product_type]}
-            ],
-            max_tokens=3000,
-        )
+    result = ask_ai(prompts[product_type])
 
-        result = response.choices[0].message.content
+    if not result:
+        await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
+        return ConversationHandler.END
 
-        if len(result) > 4000:
-            parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
-            for i, part in enumerate(parts):
-                await update.message.reply_text(
-                    f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
-                    parse_mode="Markdown"
-                )
-        else:
+    if len(result) > 4000:
+        parts = [result[i:i+4000] for i in range(0, len(result), 4000)]
+        for i, part in enumerate(parts):
             await update.message.reply_text(
-                f"✅ *{label} готов!*\n\n```\n{result}\n```",
+                f"📦 *Часть {i+1}/{len(parts)}:*\n\n```\n{part}\n```",
                 parse_mode="Markdown"
             )
-
+    else:
         await update.message.reply_text(
-            f"🎉 Ваш *{label}* создан!\n\n"
-            "Хотите создать ещё? Используйте /newbot",
+            f"✅ *{label} готов!*\n\n```\n{result}\n```",
             parse_mode="Markdown"
         )
 
-    except Exception as e:
-        await update.message.reply_text("❌ Ошибка генерации. Попробуйте /newbot ещё раз.")
-        logging.error(f"Groq error: {e}")
+    await update.message.reply_text(
+        f"🎉 Ваш *{label}* создан!\n\nХотите создать ещё? Используйте /newbot",
+        parse_mode="Markdown"
+    )
 
     return ConversationHandler.END
 
@@ -219,7 +220,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Обработчик диалога для каждой команды
     for cmd, handler in [("tgbot", tgbot), ("aibot", aibot_cmd), ("site", site_cmd)]:
         conv = ConversationHandler(
             entry_points=[CommandHandler(cmd, handler)],
@@ -243,4 +243,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
